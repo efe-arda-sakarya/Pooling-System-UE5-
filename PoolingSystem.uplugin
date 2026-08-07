@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Pooling System",
+	"Description": "Blueprint-first actor pooling. Reuses actors instead of spawning and destroying them, with zero setup and no required base class.",
+	"Category": "Performance",
+	"CreatedBy": "Efe Arda Sakarya",
+	"CreatedByURL": "https://efeardasakarya.com",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "PoolingSystem",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
