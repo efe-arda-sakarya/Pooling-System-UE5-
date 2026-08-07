@@ -1,0 +1,14 @@
+# Unreal Engine plugin - derlenen/üretilen dosyalar
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+*.opensdf
+*.sdf
+*.sln
+*.suo
+*.VC.db
+*.VC.opendb
+.vs/
+.vscode/
+.idea/
