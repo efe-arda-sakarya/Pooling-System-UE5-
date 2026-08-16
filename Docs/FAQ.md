@@ -57,6 +57,25 @@ Almost always a missing `Despawn Pooled Actor`. The actors are handed out and ne
 
 `Get Pool Stats` will show it immediately: **Active** climbing and never dropping. Set **Max Size** while you hunt for the cause.
 
+## I can only despawn the last actor I spawned — how do I track several at once?
+
+`Despawn Pooled Actor` needs a specific actor reference, the same way `Destroy Actor` does — the pool has no way to guess which instance you mean. If your Blueprint only keeps a single "last spawned actor" variable, calling Despawn twice in a row fails the second time: the reference still points at an actor you already returned.
+
+In real gameplay code this rarely comes up, because actors usually despawn themselves (a bullet calls `Despawn Pooled Actor (Self)` on hit). If you are managing several pooled actors from one Blueprint — a spawner, a debug panel, a wave controller — track them yourself with an array used as a stack:
+
+```
+On spawn:
+  Spawn Pooled Actor  ─>  Branch (Success)
+                              └─> Array Add  (Target: SpawnedActors, New Item: the spawned actor)
+
+On despawn:
+  Branch (SpawnedActors → Length > 0)
+    └─> Get Last Index  ─> Get (a copy)  ─> Despawn Pooled Actor
+                        └─> Remove Index  (same index, after despawning)
+```
+
+This despawns the most recently spawned actor first and keeps working no matter how many times you call it in a row.
+
 ## Does it support networking / replication?
 
 Not in this version. The plugin runs locally on whichever instance calls it. Replicated actors have their own lifetime rules that pooling has to respect, and doing that properly is a larger job than this plugin takes on.
