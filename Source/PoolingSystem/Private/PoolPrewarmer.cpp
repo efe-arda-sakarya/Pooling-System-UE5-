@@ -3,6 +3,7 @@
 #include "PoolPrewarmer.h"
 
 #include "Engine/World.h"
+#include "PoolProfile.h"
 #include "PoolingSubsystem.h"
 #include "PoolingSystem.h"
 
@@ -22,6 +23,12 @@ void APoolPrewarmer::BeginPlay()
 	if (!Subsystem)
 	{
 		return;
+	}
+
+	// Profile first, then the inline rows, so a level can override a shared definition.
+	if (Profile)
+	{
+		Subsystem->PrewarmFromProfile(Profile);
 	}
 
 	for (const FPoolSpec& Spec : PoolsToPrewarm)

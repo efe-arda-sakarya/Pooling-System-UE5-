@@ -37,6 +37,14 @@ void UPoolingLibrary::PrewarmPool(const UObject* WorldContextObject, TSubclassOf
 	}
 }
 
+void UPoolingLibrary::PrewarmFromProfile(const UObject* WorldContextObject, const UPoolProfile* Profile)
+{
+	if (UPoolingSubsystem* Subsystem = GetPoolingSubsystem(WorldContextObject))
+	{
+		Subsystem->PrewarmFromProfile(Profile);
+	}
+}
+
 void UPoolingLibrary::ClearPool(const UObject* WorldContextObject, TSubclassOf<AActor> ActorClass)
 {
 	if (UPoolingSubsystem* Subsystem = GetPoolingSubsystem(WorldContextObject))
@@ -49,4 +57,37 @@ FPoolStats UPoolingLibrary::GetPoolStats(const UObject* WorldContextObject, TSub
 {
 	const UPoolingSubsystem* Subsystem = GetPoolingSubsystem(WorldContextObject);
 	return Subsystem ? Subsystem->GetPoolStats(ActorClass) : FPoolStats();
+}
+
+FPoolStats UPoolingLibrary::GetAllPoolStats(const UObject* WorldContextObject)
+{
+	const UPoolingSubsystem* Subsystem = GetPoolingSubsystem(WorldContextObject);
+	return Subsystem ? Subsystem->GetAllPoolStats() : FPoolStats();
+}
+
+void UPoolingLibrary::SetPoolingBypassed(const UObject* WorldContextObject, bool bBypassed)
+{
+	if (UPoolingSubsystem* Subsystem = GetPoolingSubsystem(WorldContextObject))
+	{
+		Subsystem->SetPoolingBypassed(bBypassed);
+	}
+}
+
+bool UPoolingLibrary::TogglePoolingBypassed(const UObject* WorldContextObject)
+{
+	UPoolingSubsystem* Subsystem = GetPoolingSubsystem(WorldContextObject);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const bool bNewState = !Subsystem->IsPoolingBypassed();
+	Subsystem->SetPoolingBypassed(bNewState);
+	return bNewState;
+}
+
+bool UPoolingLibrary::IsPoolingBypassed(const UObject* WorldContextObject)
+{
+	const UPoolingSubsystem* Subsystem = GetPoolingSubsystem(WorldContextObject);
+	return Subsystem ? Subsystem->IsPoolingBypassed() : false;
 }

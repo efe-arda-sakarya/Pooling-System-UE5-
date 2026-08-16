@@ -5,6 +5,8 @@
 #include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/MovementComponent.h"
+#include "PoolLifetimeComponent.h"
+#include "PoolProfile.h"
 #include "PoolableInterface.h"
 #include "PoolingSystem.h"
 #include "TimerManager.h"
@@ -25,6 +27,18 @@ bool UPoolingSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) c
 	return WorldType == EWorldType::Game || WorldType == EWorldType::PIE;
 }
 
+void UPoolingSubsystem::SetPoolingBypassed(bool bBypassed)
+{
+	if (bPoolingBypassed == bBypassed)
+	{
+		return;
+	}
+
+	bPoolingBypassed = bBypassed;
+
+	UE_LOG(LogPoolingSystem, Log, TEXT("Pooling is now %s."), bBypassed ? TEXT("bypassed (actors are spawned and destroyed directly)") : TEXT("active"));
+}
+
 AActor* UPoolingSubsystem::SpawnPooledActor(TSubclassOf<AActor> ActorClass, const FTransform& SpawnTransform, bool& bSuccess)
 {
 	bSuccess = false;
@@ -33,6 +47,21 @@ AActor* UPoolingSubsystem::SpawnPooledActor(TSubclassOf<AActor> ActorClass, cons
 	{
 		UE_LOG(LogPoolingSystem, Warning, TEXT("Spawn Pooled Actor was called with no actor class."));
 		return nullptr;
+	}
+
+	// Benchmark path: behave exactly like a caller that never heard of pooling. The actor still
+	// receives On Pool Spawned so gameplay code does not have to branch.
+	if (bPoolingBypassed)
+	{
+		AActor* RawActor = SpawnRawInstance(ActorClass, SpawnTransform);
+		if (!RawActor)
+		{
+			return nullptr;
+		}
+
+		NotifySpawned(RawActor);
+		bSuccess = true;
+		return RawActor;
 	}
 
 	// Note: the pool reference is looked up again after anything that could spawn an actor.
@@ -97,8 +126,19 @@ bool UPoolingSubsystem::DespawnPooledActor(AActor* Actor)
 	}
 
 	FActorPool* Pool = Pools.Find(Actor->GetClass());
-	if (!Pool || Pool->ActiveActors.Remove(Actor) == 0)
+	const bool bBelongsToPool = Pool && Pool->ActiveActors.Remove(Actor) > 0;
+
+	// While bypassed, anything that did not come from a pool is simply destroyed. Actors handed
+	// out before the switch are still returned properly, so toggling mid-game stays safe.
+	if (!bBelongsToPool)
 	{
+		if (bPoolingBypassed)
+		{
+			NotifyDespawned(Actor);
+			Actor->Destroy();
+			return true;
+		}
+
 		UE_LOG(LogPoolingSystem, Warning,
 			TEXT("Despawn Pooled Actor was called on '%s', which is not currently checked out of a pool. ")
 			TEXT("It was either never pooled or has already been despawned."),
@@ -145,6 +185,26 @@ void UPoolingSubsystem::PrewarmPool(TSubclassOf<AActor> ActorClass, int32 Count,
 		*ActorClass->GetName(), Created, Pools.FindChecked(ActorClass).TotalCount());
 }
 
+void UPoolingSubsystem::PrewarmFromProfile(const UPoolProfile* Profile)
+{
+	if (!Profile)
+	{
+		UE_LOG(LogPoolingSystem, Warning, TEXT("Prewarm From Profile was called with no profile."));
+		return;
+	}
+
+	for (const FPoolSpec& Spec : Profile->Pools)
+	{
+		if (!Spec.ActorClass)
+		{
+			UE_LOG(LogPoolingSystem, Warning, TEXT("Pool profile '%s' has a row with no actor class set."), *Profile->GetName());
+			continue;
+		}
+
+		PrewarmPool(Spec.ActorClass, Spec.Count, Spec.OverflowPolicy, Spec.MaxSize);
+	}
+}
+
 void UPoolingSubsystem::ClearPool(TSubclassOf<AActor> ActorClass)
 {
 	FActorPool* Pool = ActorClass ? Pools.Find(ActorClass) : nullptr;
@@ -188,7 +248,21 @@ FPoolStats UPoolingSubsystem::GetPoolStats(TSubclassOf<AActor> ActorClass) const
 	return Stats;
 }
 
-AActor* UPoolingSubsystem::CreatePooledInstance(TSubclassOf<AActor> ActorClass)
+FPoolStats UPoolingSubsystem::GetAllPoolStats() const
+{
+	FPoolStats Stats;
+
+	for (const TPair<TSubclassOf<AActor>, FActorPool>& Entry : Pools)
+	{
+		Stats.Active += Entry.Value.ActiveActors.Num();
+		Stats.Available += Entry.Value.AvailableActors.Num();
+	}
+	Stats.Total = Stats.Active + Stats.Available;
+
+	return Stats;
+}
+
+AActor* UPoolingSubsystem::SpawnRawInstance(TSubclassOf<AActor> ActorClass, const FTransform& SpawnTransform)
 {
 	UWorld* World = GetWorld();
 	if (!World)
@@ -201,14 +275,23 @@ AActor* UPoolingSubsystem::CreatePooledInstance(TSubclassOf<AActor> ActorClass)
 	// never be refused or nudged because something is already standing there.
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	AActor* Actor = World->SpawnActor<AActor>(ActorClass, FTransform::Identity, SpawnParameters);
+	AActor* Actor = World->SpawnActor<AActor>(ActorClass, SpawnTransform, SpawnParameters);
 	if (!Actor)
 	{
-		UE_LOG(LogPoolingSystem, Warning, TEXT("Failed to create a pooled instance of '%s'."), *ActorClass->GetName());
-		return nullptr;
+		UE_LOG(LogPoolingSystem, Warning, TEXT("Failed to spawn an instance of '%s'."), *ActorClass->GetName());
 	}
 
-	DeactivateActor(Actor);
+	return Actor;
+}
+
+AActor* UPoolingSubsystem::CreatePooledInstance(TSubclassOf<AActor> ActorClass)
+{
+	AActor* Actor = SpawnRawInstance(ActorClass, FTransform::Identity);
+	if (Actor)
+	{
+		DeactivateActor(Actor);
+	}
+
 	return Actor;
 }
 
@@ -222,18 +305,12 @@ void UPoolingSubsystem::ActivateActor(AActor* Actor, const FTransform& SpawnTran
 	Actor->SetActorEnableCollision(true);
 	Actor->SetActorTickEnabled(true);
 
-	if (Actor->GetClass()->ImplementsInterface(UPoolable::StaticClass()))
-	{
-		IPoolable::Execute_OnPoolSpawned(Actor);
-	}
+	NotifySpawned(Actor);
 }
 
 void UPoolingSubsystem::DeactivateActor(AActor* Actor) const
 {
-	if (Actor->GetClass()->ImplementsInterface(UPoolable::StaticClass()))
-	{
-		IPoolable::Execute_OnPoolDespawned(Actor);
-	}
+	NotifyDespawned(Actor);
 
 	Actor->SetActorHiddenInGame(true);
 	Actor->SetActorEnableCollision(false);
@@ -260,5 +337,36 @@ void UPoolingSubsystem::DeactivateActor(AActor* Actor) const
 	if (const UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearAllTimersForObject(Actor);
+	}
+}
+
+void UPoolingSubsystem::NotifySpawned(AActor* Actor) const
+{
+	if (Actor->GetClass()->ImplementsInterface(UPoolable::StaticClass()))
+	{
+		IPoolable::Execute_OnPoolSpawned(Actor);
+	}
+
+	if (UPoolLifetimeComponent* LifetimeComponent = Actor->FindComponentByClass<UPoolLifetimeComponent>())
+	{
+		if (LifetimeComponent->bAutoStart)
+		{
+			LifetimeComponent->StartLifetime();
+		}
+	}
+}
+
+void UPoolingSubsystem::NotifyDespawned(AActor* Actor) const
+{
+	// Cancelled before the interface event so user code can start its own countdown from inside
+	// On Pool Despawned without it being wiped straight afterwards.
+	if (UPoolLifetimeComponent* LifetimeComponent = Actor->FindComponentByClass<UPoolLifetimeComponent>())
+	{
+		LifetimeComponent->CancelLifetime();
+	}
+
+	if (Actor->GetClass()->ImplementsInterface(UPoolable::StaticClass()))
+	{
+		IPoolable::Execute_OnPoolDespawned(Actor);
 	}
 }
