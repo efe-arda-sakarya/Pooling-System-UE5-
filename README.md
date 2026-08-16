@@ -63,6 +63,10 @@ Drag a **Pool Prewarmer** into your level and fill in its **Pools To Prewarm** l
 
 Without a prewarmer everything still works — the pool simply grows the first time you use it.
 
+**5. Let short-lived actors return themselves (optional).**
+
+Add a **Pool Lifetime** component to anything that should disappear on a timer — impact flashes, tracers, expiring pickups — and set its **Lifetime**. The countdown starts when the pool hands the actor out and is cancelled if the actor comes back early. No Blueprint wiring at all.
+
 Step-by-step scenarios are in **[Docs/Examples.md](Docs/Examples.md)**.
 
 ---
@@ -106,6 +110,10 @@ Calling it twice on the same actor is safe — the second call returns false and
 
 Makes sure the pool holds **at least** `Count` instances. It is not additive: calling it twice with 50 gives you 50, not 100. Safe to call at any time — before a boss fight, at the start of a wave, or in `Begin Play`.
 
+### Prewarm From Profile
+
+Applies every row of a **Pool Profile** asset in one call. See [Pool profiles](#pool-profiles) below.
+
 ### Clear Pool
 
 Destroys every idle instance of a pool. Instances still checked out are left alone and return to the pool as normal. Use it when leaving a heavy area and you want the memory back.
@@ -114,9 +122,65 @@ Destroys every idle instance of a pool. Instances still checked out are left alo
 
 Returns **Total**, **Active** and **Available** for one pool. Useful for a debug overlay, and for showing the difference in a demo.
 
+### Get All Pool Stats
+
+The same three numbers summed across every pool in the world. **Get Pool Count** tells you how many distinct pools exist.
+
 ### Get Pooling Subsystem
 
 Returns the underlying `Pooling Subsystem`. Rarely needed from Blueprint; it exists for C++ callers and for advanced use.
+
+---
+
+## Pool profiles
+
+Typing the same pool sizes into every level gets old, and keeping them in sync gets worse. A **Pool Profile** is an asset that holds the list once.
+
+Create one with **right-click → Miscellaneous → Data Asset → Pool Profile**, then fill in the rows — the same four fields you would type on a prewarmer: actor class, count, overflow policy, max size.
+
+Point a **Pool Prewarmer** at it with its **Profile** field, or call **Prewarm From Profile** yourself.
+
+A prewarmer can use both at once. The profile is applied first, then the prewarmer's own **Pools To Prewarm** rows, so a single level can override one class without forking the shared asset:
+
+| Source | Row | Result |
+|---|---|---|
+| `DA_Pools` (profile) | `BP_Bullet` → 120 | |
+| Prewarmer (inline) | `BP_Bullet` → 200 | **200** — the inline row runs last |
+
+Leave the inline list empty if you only want the profile.
+
+---
+
+## Pool Lifetime component
+
+Add it to any actor that should return itself after a set time.
+
+| Property | Default | Meaning |
+|---|---|---|
+| Lifetime | `2.0` | Seconds before the actor returns itself. `0` disables the countdown |
+| Auto Start | `true` | Start counting as soon as the pool hands the actor out |
+
+It also exposes **Start Lifetime**, **Cancel Lifetime** and **Get Remaining Lifetime** if you want to drive it yourself — set **Auto Start** to false and call **Start Lifetime** when it suits you.
+
+The countdown is cancelled automatically when the actor goes back into the pool, so an actor that is despawned early never fires a stale timer.
+
+---
+
+## Measuring what pooling saves you
+
+Pooling is supposed to be an optimisation, so the plugin lets you prove it.
+
+**Set Pooling Bypassed** turns the whole system off without touching a single line of calling code: **Spawn Pooled Actor** becomes a plain `SpawnActor`, **Despawn Pooled Actor** becomes a plain `Destroy`. Everything that spawns through the plugin follows automatically — there is nothing to branch and nothing to duplicate.
+
+| Function | Meaning |
+|---|---|
+| Set Pooling Bypassed | Turn the bypass on or off |
+| Toggle Pooling Bypassed | Flip it and return the new state — one node for a debug key |
+| Is Pooling Bypassed | For an on-screen readout |
+
+Toggling mid-game is safe: actors handed out before the switch still return to their pool correctly.
+
+A useful overlay is three numbers — frames per second, **Get All Pool Stats**, and **Is Pooling Bypassed** — with one key bound to **Toggle Pooling Bypassed**. Flip it under load and watch the frame time move.
 
 ---
 
@@ -151,6 +215,20 @@ if (UPoolingSubsystem* Pool = GetWorld()->GetSubsystem<UPoolingSubsystem>())
 ```
 
 Implement `IPoolable` on your actor to receive `OnPoolSpawned` / `OnPoolDespawned`.
+
+Add `"PoolingSystem"` to `PublicDependencyModuleNames` in your `.Build.cs`.
+
+---
+
+## What ships in the box
+
+| Folder | Contents |
+|---|---|
+| `Source/PoolingSystem` | The plugin itself. This is what you came for |
+| `Source/PoolingSystemDemo` | Building blocks used by the demo level: a configurable spawner, a projectile base class, frame-rate helpers |
+| `Content/PoolingSystemDemo` | The demo level and its assets |
+
+The demo is separate on purpose. To strip it from your project, delete both `PoolingSystemDemo` folders **and** remove the `PoolingSystemDemo` entry from the `Modules` array in `PoolingSystem.uplugin` — the engine reports a missing module if the folder goes but the entry stays. Nothing in `Source/PoolingSystem` depends on it.
 
 ---
 

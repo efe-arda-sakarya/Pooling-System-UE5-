@@ -76,6 +76,28 @@ On despawn:
 
 This despawns the most recently spawned actor first and keeps working no matter how many times you call it in a row.
 
+## How much is pooling actually saving me?
+
+Measure it. Call **Set Pooling Bypassed** (or bind **Toggle Pooling Bypassed** to a debug key) and the plugin stops pooling entirely: spawning becomes a plain `SpawnActor`, despawning a plain `Destroy`. Your calling code does not change at all, so you are comparing the same scene against itself.
+
+Put **Get All Pool Stats** and a frame-time readout on screen, run your heaviest moment, and flip the switch. If the two numbers are identical, pooling is not your bottleneck and you can spend your effort elsewhere — that is a useful answer too.
+
+Toggling mid-game is safe: actors that were handed out before the switch still return to their pool correctly.
+
+## Do I have to type my pool sizes into every level?
+
+No. Make a **Pool Profile** asset (right-click → Miscellaneous → Data Asset → Pool Profile), fill in the rows once, and point every Pool Prewarmer at it with the **Profile** field.
+
+If one level needs a different number for a single class, add just that row to the prewarmer's own **Pools To Prewarm** list. The profile is applied first and the inline rows run after it, so the inline value wins without you having to duplicate the whole asset.
+
+## How do I despawn something after a few seconds?
+
+Add a **Pool Lifetime** component to the actor and set **Lifetime**. That is the whole setup — no timer nodes, no Begin Play wiring.
+
+The countdown starts when the pool hands the actor out and is cancelled if the actor is returned early, so an actor that is despawned on impact never fires a leftover timer on its next use.
+
+If you want to control the timing yourself, set **Auto Start** to false and call **Start Lifetime** when it suits you.
+
 ## Does it support networking / replication?
 
 Not in this version. The plugin runs locally on whichever instance calls it. Replicated actors have their own lifetime rules that pooling has to respect, and doing that properly is a larger job than this plugin takes on.
