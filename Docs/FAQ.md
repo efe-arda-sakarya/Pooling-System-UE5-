@@ -98,6 +98,24 @@ The countdown starts when the pool hands the actor out and is cancelled if the a
 
 If you want to control the timing yourself, set **Auto Start** to false and call **Start Lifetime** when it suits you.
 
+## Prewarming thousands of actors freezes my level start
+
+Because every prewarmed instance is a real `SpawnActor` with a real `BeginPlay`, and doing eight thousand of them in one frame takes as long as it takes.
+
+Set **Per Frame** on that pool row — in the profile or on the prewarmer — and the work is spread across frames while the level keeps running. **Get Pending Prewarm Count** tells a loading screen when it is done.
+
+You will not have to guess when you have crossed the line. The plugin times its own work and warns you with the real numbers when a single prewarm costs more than about 50 ms.
+
+## How large will a pool get if I never prewarm it?
+
+As large as your peak concurrent demand, then it stops.
+
+Say you fire ten bullets a second and each lives three seconds. The first shots each create an instance because nothing is idle yet, and the pool keeps growing until the earliest bullets start coming back — around thirty. From then on every shot reuses an existing instance and the pool stays at thirty. Stop firing and you have `Total 30, Active 0, Available 30`.
+
+So a pool that is never prewarmed is not unbounded in practice; it just pays its creation cost during gameplay instead of at load. That is exactly what prewarming moves.
+
+If you want a hard ceiling anyway, call **Configure Pool** with a **Max Size** — you do not have to prewarm anything to set a limit.
+
 ## Does it support networking / replication?
 
 Not in this version. The plugin runs locally on whichever instance calls it. Replicated actors have their own lifetime rules that pooling has to respect, and doing that properly is a larger job than this plugin takes on.

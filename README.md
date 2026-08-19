@@ -107,8 +107,15 @@ Calling it twice on the same actor is safe — the second call returns false and
 | Count | Integer | Target number of instances |
 | Overflow Policy | Enum | `Grow` or `Reject` (advanced pin) |
 | Max Size | Integer | Upper bound, `0` = unlimited (advanced pin) |
+| Per Frame | Integer | Spread the work over frames, `0` = all at once (advanced pin) |
 
 Makes sure the pool holds **at least** `Count` instances. It is not additive: calling it twice with 50 gives you 50, not 100. Safe to call at any time — before a boss fight, at the start of a wave, or in `Begin Play`.
+
+See [Prewarming without stalling](#prewarming-without-stalling) if your counts run into the thousands.
+
+### Configure Pool
+
+Sets a pool's **Overflow Policy** and **Max Size** without creating anything. Use it when you are happy for a pool to grow on demand but still want a ceiling, or want it to refuse rather than grow.
 
 ### Prewarm From Profile
 
@@ -148,6 +155,33 @@ A prewarmer can use both at once. The profile is applied first, then the prewarm
 | Prewarmer (inline) | `BP_Bullet` → 200 | **200** — the inline row runs last |
 
 Leave the inline list empty if you only want the profile.
+
+One asymmetry worth knowing: prewarming only ever **tops a pool up**, it never tears one down. An inline row asking for 200 when the profile said 120 creates 80 more; an inline row asking for 50 leaves all 120 in place. Overflow policy and max size are overwritten either way, so a smaller inline row still changes the rules even though it changes no instances.
+
+---
+
+## Prewarming without stalling
+
+Every prewarmed instance is a real `SpawnActor` with a real `BeginPlay`. A few hundred is nothing; a few thousand is a frozen frame at level start.
+
+Set **Per Frame** on the pool row — on the profile or on the prewarmer — and the pool fills a slice at a time while the level keeps running:
+
+| Per Frame | Behaviour |
+|---|---|
+| `0` (default) | Everything is created immediately. Right for small pools |
+| `200` | 200 instances per frame until the pool is full |
+
+**Get Pending Prewarm Count** returns how many are still queued, so a loading screen can wait for it to reach zero.
+
+You do not have to guess where the line is. The plugin times the work and tells you when it hurt:
+
+```
+Warning: Prewarming 8000 instances of 'BP_Bullet' took 3400 ms in one frame,
+which is a visible hitch. Set Per Frame on that pool row to spread the work
+across several frames instead.
+```
+
+That number is measured, not estimated — an actor's real cost depends on its components, and the only honest way to know it is to build one and look at the clock.
 
 ---
 
@@ -224,11 +258,10 @@ Add `"PoolingSystem"` to `PublicDependencyModuleNames` in your `.Build.cs`.
 
 | Folder | Contents |
 |---|---|
-| `Source/PoolingSystem` | The plugin itself. This is what you came for |
-| `Source/PoolingSystemDemo` | Building blocks used by the demo level: a configurable spawner, a projectile base class, frame-rate helpers |
+| `Source/PoolingSystem` | The whole plugin — one module, nothing optional |
 | `Content/PoolingSystemDemo` | The demo level and its assets |
 
-The demo is separate on purpose. To strip it from your project, delete both `PoolingSystemDemo` folders **and** remove the `PoolingSystemDemo` entry from the `Modules` array in `PoolingSystem.uplugin` — the engine reports a missing module if the folder goes but the entry stays. Nothing in `Source/PoolingSystem` depends on it.
+There is no separate demo module: the demo is built from the same classes you get, so anything you see it doing you can do too. Deleting `Content/PoolingSystemDemo` removes the demo and leaves the plugin working.
 
 ---
 
