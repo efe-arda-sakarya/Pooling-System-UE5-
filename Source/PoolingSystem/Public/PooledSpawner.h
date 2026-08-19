@@ -68,7 +68,7 @@ struct FPooledSpawnPattern
  * applies to it automatically — no branching anywhere in the spawner itself.
  */
 UCLASS(Blueprintable, meta = (DisplayName = "Pooled Spawner"))
-class POOLINGSYSTEMDEMO_API APooledSpawner : public AActor
+class POOLINGSYSTEM_API APooledSpawner : public AActor
 {
 	GENERATED_BODY()
 

@@ -4,7 +4,7 @@
 
 #include "Engine/World.h"
 #include "PoolingSubsystem.h"
-#include "PoolingSystemDemo.h"
+#include "PoolingSystem.h"
 #include "TimerManager.h"
 
 #if WITH_EDITORONLY_DATA
@@ -65,7 +65,7 @@ void APooledSpawner::StartSpawning()
 
 	if (!Pattern.ActorClass)
 	{
-		UE_LOG(LogPoolingSystemDemo, Warning, TEXT("'%s' cannot start: its pattern has no actor class."), *GetName());
+		UE_LOG(LogPoolingSystem, Warning, TEXT("'%s' cannot start: its pattern has no actor class."), *GetName());
 		return;
 	}
 

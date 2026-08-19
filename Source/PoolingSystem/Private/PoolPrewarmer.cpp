@@ -39,6 +39,6 @@ void APoolPrewarmer::BeginPlay()
 			continue;
 		}
 
-		Subsystem->PrewarmPool(Spec.ActorClass, Spec.Count, Spec.OverflowPolicy, Spec.MaxSize);
+		Subsystem->PrewarmPool(Spec.ActorClass, Spec.Count, Spec.OverflowPolicy, Spec.MaxSize, Spec.PerFrame);
 	}
 }

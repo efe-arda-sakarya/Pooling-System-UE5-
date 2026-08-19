@@ -19,11 +19,6 @@
 			"Name": "PoolingSystem",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
-		},
-		{
-			"Name": "PoolingSystemDemo",
-			"Type": "Runtime",
-			"LoadingPhase": "Default"
 		}
 	]
 }

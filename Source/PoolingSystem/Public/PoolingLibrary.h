@@ -33,7 +33,15 @@ public:
 
 	/** Makes sure the pool holds at least Count instances, and applies the overflow settings. */
 	UFUNCTION(BlueprintCallable, Category = "Pooling", meta = (WorldContext = "WorldContextObject", Keywords = "warm preallocate reserve fill pool", AdvancedDisplay = "3"))
-	static void PrewarmPool(const UObject* WorldContextObject, TSubclassOf<AActor> ActorClass, int32 Count, EPoolOverflowPolicy OverflowPolicy = EPoolOverflowPolicy::Grow, int32 MaxSize = 0);
+	static void PrewarmPool(const UObject* WorldContextObject, TSubclassOf<AActor> ActorClass, int32 Count, EPoolOverflowPolicy OverflowPolicy = EPoolOverflowPolicy::Grow, int32 MaxSize = 0, int32 PerFrame = 0);
+
+	/** Sets a pool's overflow rules without creating anything. */
+	UFUNCTION(BlueprintCallable, Category = "Pooling", meta = (WorldContext = "WorldContextObject", Keywords = "policy limit cap reject max configure pool"))
+	static void ConfigurePool(const UObject* WorldContextObject, TSubclassOf<AActor> ActorClass, EPoolOverflowPolicy OverflowPolicy = EPoolOverflowPolicy::Grow, int32 MaxSize = 0);
+
+	/** How many instances are still queued to be created in the background. 0 when prewarming is done. */
+	UFUNCTION(BlueprintPure, Category = "Pooling", meta = (WorldContext = "WorldContextObject", Keywords = "prewarm pending progress loading pool"))
+	static int32 GetPendingPrewarmCount(const UObject* WorldContextObject);
 
 	/** Applies every row of a Pool Profile asset. */
 	UFUNCTION(BlueprintCallable, Category = "Pooling", meta = (WorldContext = "WorldContextObject", Keywords = "warm preallocate profile data asset pool"))
@@ -65,6 +73,21 @@ public:
 	/** Whether pooling is currently bypassed. */
 	UFUNCTION(BlueprintPure, Category = "Pooling|Benchmark", meta = (WorldContext = "WorldContextObject"))
 	static bool IsPoolingBypassed(const UObject* WorldContextObject);
+
+	/** Frames per second for this frame alone. Jumps around; fine for a raw readout. */
+	UFUNCTION(BlueprintPure, Category = "Pooling|Benchmark", meta = (WorldContext = "WorldContextObject", Keywords = "fps framerate performance"))
+	static float GetInstantFPS(const UObject* WorldContextObject);
+
+	/**
+	 * Eases the previous reading towards this frame's, which is what you want on screen.
+	 * Feed the result back in as Previous FPS next frame.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Pooling|Benchmark", meta = (WorldContext = "WorldContextObject", Keywords = "fps framerate smooth average performance"))
+	static float GetSmoothedFPS(const UObject* WorldContextObject, float PreviousFPS, float InterpSpeed = 3.0f);
+
+	/** Milliseconds spent on this frame. The number that actually matters for a comparison. */
+	UFUNCTION(BlueprintPure, Category = "Pooling|Benchmark", meta = (WorldContext = "WorldContextObject", Keywords = "frame time ms performance"))
+	static float GetFrameTimeMilliseconds(const UObject* WorldContextObject);
 
 	/** The pooling subsystem of the world this object belongs to. Rarely needed from Blueprint. */
 	UFUNCTION(BlueprintPure, Category = "Pooling", meta = (WorldContext = "WorldContextObject"))

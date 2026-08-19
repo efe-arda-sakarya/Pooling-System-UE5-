@@ -46,7 +46,18 @@ public:
 	 * Calling it twice with the same count does nothing the second time.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Pooling", meta = (Keywords = "warm preallocate reserve fill pool", AdvancedDisplay = "2"))
-	void PrewarmPool(TSubclassOf<AActor> ActorClass, int32 Count, EPoolOverflowPolicy OverflowPolicy = EPoolOverflowPolicy::Grow, int32 MaxSize = 0);
+	void PrewarmPool(TSubclassOf<AActor> ActorClass, int32 Count, EPoolOverflowPolicy OverflowPolicy = EPoolOverflowPolicy::Grow, int32 MaxSize = 0, int32 PerFrame = 0);
+
+	/**
+	 * Sets a pool's overflow rules without creating anything.
+	 * Use it when you want a cap or a Reject policy on a pool you are happy to let grow on demand.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Pooling", meta = (Keywords = "policy limit cap reject max configure pool"))
+	void ConfigurePool(TSubclassOf<AActor> ActorClass, EPoolOverflowPolicy OverflowPolicy = EPoolOverflowPolicy::Grow, int32 MaxSize = 0);
+
+	/** How many instances are still queued to be created in the background. */
+	UFUNCTION(BlueprintPure, Category = "Pooling", meta = (Keywords = "prewarm pending progress loading pool"))
+	int32 GetPendingPrewarmCount() const;
 
 	/** Applies every row of a Pool Profile asset. */
 	UFUNCTION(BlueprintCallable, Category = "Pooling", meta = (Keywords = "warm preallocate profile data asset pool"))
@@ -107,4 +118,20 @@ private:
 	/** Benchmark switch. Transient: never saved, always starts off. */
 	UPROPERTY(Transient)
 	bool bPoolingBypassed = false;
+
+	/** Creates one frame's worth of every queued prewarm, then reschedules itself. */
+	void ProcessPendingPrewarms();
+
+	/** Queues the next-tick callback, unless one is already waiting or there is nothing left. */
+	void ScheduleNextPrewarmTick();
+
+	/** Creates instances immediately and warns if it cost a visible hitch. */
+	void FillPoolNow(TSubclassOf<AActor> ActorClass, int32 TargetCount);
+
+	/** Pools still being filled a few instances per frame. */
+	UPROPERTY(Transient)
+	TArray<FPendingPrewarm> PendingPrewarms;
+
+	/** Stops the next-tick callback being queued more than once. */
+	bool bPrewarmTickScheduled = false;
 };

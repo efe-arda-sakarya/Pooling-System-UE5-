@@ -11,10 +11,18 @@
 #include "PoolingSystem.h"
 #include "TimerManager.h"
 
+namespace
+{
+	/** A single frame costing more than this is a visible hitch, and worth telling the developer. */
+	constexpr double PrewarmStallWarningMs = 50.0;
+}
+
 void UPoolingSubsystem::Deinitialize()
 {
 	// The world is going away and it takes every actor with it, so there is nothing to destroy
 	// here — only the bookkeeping to drop.
+	PendingPrewarms.Empty();
+	bPrewarmTickScheduled = false;
 	Pools.Empty();
 
 	Super::Deinitialize();
@@ -87,16 +95,30 @@ AActor* UPoolingSubsystem::SpawnPooledActor(TSubclassOf<AActor> ActorClass, cons
 		const bool bAtMaxSize = Pool.MaxSize > 0 && Pool.TotalCount() >= Pool.MaxSize;
 		const bool bRejects = Pool.OverflowPolicy == EPoolOverflowPolicy::Reject || bAtMaxSize;
 
-		if (!Pool.bOverflowWarningLogged)
+		// A pool nobody sized is meant to grow on demand, so growth is not news. Growing past a size
+		// someone actually asked for is news, and so is a Reject policy with nothing to hand out.
+		const bool bWorthWarning = bRejects || Pool.bWasConfigured;
+
+		if (bWorthWarning && !Pool.bOverflowWarningLogged)
 		{
 			Pools.FindChecked(ActorClass).bOverflowWarningLogged = true;
 
-			UE_LOG(LogPoolingSystem, Warning,
-				TEXT("Pool for '%s' ran out of instances (%d in use).%s Consider raising the prewarm count, ")
-				TEXT("or check that Despawn Pooled Actor is being called. This is logged once per pool."),
-				*ActorClass->GetName(),
-				Pool.TotalCount(),
-				bRejects ? TEXT(" The request was rejected.") : TEXT(" A new instance was created."));
+			if (bRejects && Pool.TotalCount() == 0)
+			{
+				UE_LOG(LogPoolingSystem, Warning,
+					TEXT("Pool for '%s' holds no instances and is not allowed to grow, so nothing will ever ")
+					TEXT("spawn from it. Prewarm it, or set its overflow policy to Grow."),
+					*ActorClass->GetName());
+			}
+			else
+			{
+				UE_LOG(LogPoolingSystem, Warning,
+					TEXT("Pool for '%s' ran out of instances (%d in use).%s Consider raising the prewarm count, ")
+					TEXT("or check that Despawn Pooled Actor is being called. This is logged once per pool."),
+					*ActorClass->GetName(),
+					Pool.TotalCount(),
+					bRejects ? TEXT(" The request was rejected.") : TEXT(" A new instance was created."));
+			}
 		}
 
 		if (bRejects)
@@ -154,7 +176,21 @@ bool UPoolingSubsystem::DespawnPooledActor(AActor* Actor)
 	return true;
 }
 
-void UPoolingSubsystem::PrewarmPool(TSubclassOf<AActor> ActorClass, int32 Count, EPoolOverflowPolicy OverflowPolicy, int32 MaxSize)
+void UPoolingSubsystem::ConfigurePool(TSubclassOf<AActor> ActorClass, EPoolOverflowPolicy OverflowPolicy, int32 MaxSize)
+{
+	if (!ActorClass)
+	{
+		UE_LOG(LogPoolingSystem, Warning, TEXT("Configure Pool was called with no actor class."));
+		return;
+	}
+
+	FActorPool& Pool = Pools.FindOrAdd(ActorClass);
+	Pool.OverflowPolicy = OverflowPolicy;
+	Pool.MaxSize = MaxSize;
+	Pool.bWasConfigured = true;
+}
+
+void UPoolingSubsystem::PrewarmPool(TSubclassOf<AActor> ActorClass, int32 Count, EPoolOverflowPolicy OverflowPolicy, int32 MaxSize, int32 PerFrame)
 {
 	if (!ActorClass)
 	{
@@ -162,14 +198,45 @@ void UPoolingSubsystem::PrewarmPool(TSubclassOf<AActor> ActorClass, int32 Count,
 		return;
 	}
 
+	ConfigurePool(ActorClass, OverflowPolicy, MaxSize);
+
+	const int32 Missing = Count - Pools.FindChecked(ActorClass).TotalCount();
+	if (Missing <= 0)
 	{
-		FActorPool& Pool = Pools.FindOrAdd(ActorClass);
-		Pool.OverflowPolicy = OverflowPolicy;
-		Pool.MaxSize = MaxSize;
+		return;
 	}
 
+	if (PerFrame <= 0)
+	{
+		FillPoolNow(ActorClass, Count);
+		return;
+	}
+
+	// Queued instead: the level keeps running while the pool fills up a few instances at a time.
+	if (FPendingPrewarm* Existing = PendingPrewarms.FindByPredicate(
+			[ActorClass](const FPendingPrewarm& Entry) { return Entry.ActorClass == ActorClass; }))
+	{
+		Existing->Remaining = FMath::Max(Existing->Remaining, Missing);
+		Existing->PerFrame = PerFrame;
+	}
+	else
+	{
+		FPendingPrewarm Pending;
+		Pending.ActorClass = ActorClass;
+		Pending.Remaining = Missing;
+		Pending.PerFrame = PerFrame;
+		PendingPrewarms.Add(Pending);
+	}
+
+	ScheduleNextPrewarmTick();
+}
+
+void UPoolingSubsystem::FillPoolNow(TSubclassOf<AActor> ActorClass, int32 TargetCount)
+{
+	const double StartSeconds = FPlatformTime::Seconds();
+
 	int32 Created = 0;
-	while (Pools.FindChecked(ActorClass).TotalCount() < Count)
+	while (Pools.FindChecked(ActorClass).TotalCount() < TargetCount)
 	{
 		AActor* Actor = CreatePooledInstance(ActorClass);
 		if (!Actor)
@@ -181,8 +248,102 @@ void UPoolingSubsystem::PrewarmPool(TSubclassOf<AActor> ActorClass, int32 Count,
 		++Created;
 	}
 
-	UE_LOG(LogPoolingSystem, Log, TEXT("Prewarmed pool for '%s': %d created, %d total."),
-		*ActorClass->GetName(), Created, Pools.FindChecked(ActorClass).TotalCount());
+	const double ElapsedMs = (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
+	const int32 Total = Pools.FindChecked(ActorClass).TotalCount();
+
+	// Measured, not guessed: an actor's real cost depends on its components, and the only honest
+	// way to know it is to build one and look at the clock.
+	if (ElapsedMs > PrewarmStallWarningMs)
+	{
+		UE_LOG(LogPoolingSystem, Warning,
+			TEXT("Prewarming %d instances of '%s' took %.0f ms in one frame, which is a visible hitch. ")
+			TEXT("Set Per Frame on that pool row to spread the work across several frames instead."),
+			Created, *ActorClass->GetName(), ElapsedMs);
+	}
+	else
+	{
+		UE_LOG(LogPoolingSystem, Log, TEXT("Prewarmed pool for '%s': %d created, %d total (%.1f ms)."),
+			*ActorClass->GetName(), Created, Total, ElapsedMs);
+	}
+}
+
+void UPoolingSubsystem::ScheduleNextPrewarmTick()
+{
+	if (bPrewarmTickScheduled || PendingPrewarms.Num() == 0)
+	{
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		bPrewarmTickScheduled = true;
+		World->GetTimerManager().SetTimerForNextTick(this, &UPoolingSubsystem::ProcessPendingPrewarms);
+	}
+}
+
+void UPoolingSubsystem::ProcessPendingPrewarms()
+{
+	bPrewarmTickScheduled = false;
+
+	for (int32 Index = PendingPrewarms.Num() - 1; Index >= 0; --Index)
+	{
+		// Copied out before spawning: creating an actor runs user code that may queue another
+		// prewarm, and that can reallocate the array underneath us.
+		const TSubclassOf<AActor> ClassToFill = PendingPrewarms[Index].ActorClass;
+		const int32 ThisFrame = FMath::Min(PendingPrewarms[Index].PerFrame, PendingPrewarms[Index].Remaining);
+
+		if (!ClassToFill || ThisFrame <= 0)
+		{
+			PendingPrewarms.RemoveAt(Index);
+			continue;
+		}
+
+		int32 Created = 0;
+		for (int32 Step = 0; Step < ThisFrame; ++Step)
+		{
+			AActor* Actor = CreatePooledInstance(ClassToFill);
+			if (!Actor)
+			{
+				break;
+			}
+
+			Pools.FindOrAdd(ClassToFill).AvailableActors.Add(Actor);
+			++Created;
+		}
+
+		// Find the entry again rather than trusting the old index.
+		const int32 CurrentIndex = PendingPrewarms.IndexOfByPredicate(
+			[ClassToFill](const FPendingPrewarm& Entry) { return Entry.ActorClass == ClassToFill; });
+
+		if (CurrentIndex == INDEX_NONE)
+		{
+			continue;
+		}
+
+		PendingPrewarms[CurrentIndex].Remaining -= Created;
+
+		// Created == 0 means spawning failed; dropping the entry avoids an endless retry loop.
+		if (Created == 0 || PendingPrewarms[CurrentIndex].Remaining <= 0)
+		{
+			UE_LOG(LogPoolingSystem, Log, TEXT("Finished prewarming '%s': %d total."),
+				*ClassToFill->GetName(), Pools.FindOrAdd(ClassToFill).TotalCount());
+
+			PendingPrewarms.RemoveAt(CurrentIndex);
+		}
+	}
+
+	ScheduleNextPrewarmTick();
+}
+
+int32 UPoolingSubsystem::GetPendingPrewarmCount() const
+{
+	int32 Total = 0;
+	for (const FPendingPrewarm& Pending : PendingPrewarms)
+	{
+		Total += FMath::Max(0, Pending.Remaining);
+	}
+
+	return Total;
 }
 
 void UPoolingSubsystem::PrewarmFromProfile(const UPoolProfile* Profile)
@@ -201,7 +362,7 @@ void UPoolingSubsystem::PrewarmFromProfile(const UPoolProfile* Profile)
 			continue;
 		}
 
-		PrewarmPool(Spec.ActorClass, Spec.Count, Spec.OverflowPolicy, Spec.MaxSize);
+		PrewarmPool(Spec.ActorClass, Spec.Count, Spec.OverflowPolicy, Spec.MaxSize, Spec.PerFrame);
 	}
 }
 

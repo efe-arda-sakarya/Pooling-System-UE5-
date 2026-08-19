@@ -20,7 +20,7 @@ class UStaticMeshComponent;
  * returns itself either on impact or when its lifetime runs out.
  */
 UCLASS(Abstract, Blueprintable, meta = (DisplayName = "Pooled Projectile"))
-class POOLINGSYSTEMDEMO_API APooledProjectile : public AActor, public IPoolable
+class POOLINGSYSTEM_API APooledProjectile : public AActor, public IPoolable
 {
 	GENERATED_BODY()
 
